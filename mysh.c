@@ -6,6 +6,8 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/types.h>
+#include <dirent.h>
+
 
 #define DIRECTORIES 6
 #define BUILTIN 3
@@ -26,8 +28,26 @@ int tokens_capacity; // how many locations given to tokens by malloc.
 int read_capacity;   // how many locations given to read_arr by malloc.
 int pipe_info[2];    // stores index of first command and second command for pipe.
 
+// global variables for split_args... send to top of file later.
+char** args1;
+char** args2; 
+char** args3;
+char** args4;
+int args_lists_count;
+int args1_count, args2_count, args3_count, args4_count;
 
+int expand_wildcard(char* str, int length);
 
+/**
+ * Free all argument lists.
+ */
+void free_args()
+{
+	if (args1 != NULL) free(args1);
+	if (args2 != NULL) free(args2);
+	if (args3 != NULL) free(args3);
+	if (args4 != NULL) free(args4);
+}
 
 // free all allocated space given to read_arr.
 void free_read_arr()
@@ -82,9 +102,9 @@ void print_tokens()
  * Take input give from read_arr and split it into tokens.
  * (for now for testing purposes, just split into words (only delimiter is ' ')).
  */
-void tokenize_input()
+int tokenize_input()
 {
-	int token_len, i, j;
+	int wildcard_flag, token_len, i, j;
 	char tok[50];    // if any word is longer than 50 characters, we have bigger problems
 	
 	// set up before we start tokenizing
@@ -94,35 +114,69 @@ void tokenize_input()
 
 	// tokenize here
 	for (i = 0; i < read_arr_size; i++) {
-		token_len = 0;
+		memset(tok, '\0', 50);
+		token_len = 0, wildcard_flag = 0;
 		for (j = 0; j < BUFFSIZE; j++) {
 			if (token_count + 2 >= tokens_capacity) {
 				tokens_capacity += tokens_capacity;
 				tokens = (char **) realloc(tokens, (sizeof(char *) * tokens_capacity));
 			}
+			if (read_arr[i][j] == '*') wildcard_flag = 1;
 			if (read_arr[i][j] == '\n') {
 				if (token_len == 0) break;
-				tokens[token_count] = (char *) malloc(sizeof(char) * (token_len + 1));
-				memcpy(tokens[token_count], tok, token_len);
-				tokens[token_count][token_len] = '\0';
-				token_count++;
-				break;
-			}
-			else if (read_arr[i][j] == ' ') {
-				if (token_len == 0) continue; // nothingn to do
-				tokens[token_count] = (char *) malloc(sizeof(char) * (token_len + 1));
-				if (tokens[token_count] == NULL) printf("malloc failure????\n");
-				memcpy(tokens[token_count], tok, token_len);
-				tokens[token_count][token_len] = '\0';
-				token_count++;
-				token_len = 0;
-			}
-			else if (is_delimiter(read_arr[i][j]) == 0) {
-				if (token_len != 0) {
+				if (wildcard_flag) {
+					if (!expand_wildcard(tok, token_len)) {
+						token_count++;
+						return 1;
+					}
+					wildcard_flag = 0;
+				} else {
 					tokens[token_count] = (char *) malloc(sizeof(char) * (token_len + 1));
 					memcpy(tokens[token_count], tok, token_len);
 					tokens[token_count][token_len] = '\0';
 					token_count++;
+					memset(tok, '\0', 50);
+				}
+				break;
+			}
+			else if (read_arr[i][j] == '\\') {
+				if (read_arr[i][j+1] == '\n') continue; // end of input line, nothing to do
+				tok[token_len] = read_arr[i][j+1];
+				j++;
+				token_len++;
+			}
+			else if (read_arr[i][j] == ' ') {
+				if (token_len == 0) continue; // nothingn to do
+				if (wildcard_flag) {
+					if (!expand_wildcard(tok, token_len)) {
+						token_count++;
+						return 1;
+					}
+					wildcard_flag = 0;
+				} else {
+					tokens[token_count] = (char *) malloc(sizeof(char) * (token_len + 1));
+					if (tokens[token_count] == NULL) printf("malloc failure????\n");
+					memcpy(tokens[token_count], tok, token_len);
+					tokens[token_count][token_len] = '\0';
+					token_count++;
+				}
+				memset(tok, '\0', 50);
+				token_len = 0;
+			}
+			else if (is_delimiter(read_arr[i][j]) == 0) {
+				if (token_len != 0) {
+					if (wildcard_flag) {
+						if (!expand_wildcard(tok, token_len)) {
+							token_count++;
+							return 1;
+						}
+						wildcard_flag = 0;
+					} else {
+						tokens[token_count] = (char *) malloc(sizeof(char) * (token_len + 1));
+						memcpy(tokens[token_count], tok, token_len);
+						tokens[token_count][token_len] = '\0';
+						token_count++;
+					}
 				}
 				tokens[token_count] = (char *) malloc(sizeof(char) * 2);
 				tokens[token_count][0] = read_arr[i][j];
@@ -187,16 +241,79 @@ int read_input(int fd)
 }
 
 /**
+ * Helper function to reduce redundency of split_args().
+ * Return number of tokens added to the argument list.
+ */
+int split_args_helper(char** args, int i, int counter)
+{
+	for (; i < token_count; i++) {
+		if (is_delimiter(tokens[i][0]) != 0) {
+			args[counter] = tokens[i];
+			counter++;
+		}
+		else break;
+	}
+
+	return counter;
+}
+
+/**
+ * Split the array of tokens into lists of input arguments.
+ * We will NOT include redirection/pipes in args lists. Just program names and their arguments.
+ */
+void split_args()
+{
+	int i = 0;
+	
+	args1 = (char **) malloc(sizeof(char *) * (token_count + 1));
+	args2 = (char **) malloc(sizeof(char *) * token_count);
+	args3 = (char **) malloc(sizeof(char *) * token_count);
+	args4 = (char **) malloc(sizeof(char *) * token_count);
+
+	args1_count = split_args_helper(args1, i, 0);
+	i = args1_count + 1;
+	args1[args1_count] = NULL;
+	if (i == token_count) return;
+	args2_count = split_args_helper(args2, i, 0);
+	i += args2_count + 1;
+	if (i == token_count) return;
+	args3_count = split_args_helper(args3, i, 0);
+	i += args3_count + 1;
+	if (i == token_count) return;
+	args4_count = split_args_helper(args4, i, 0);
+}
+
+/**
+ * Print out the args list.
+ */
+void print_args()
+{
+	int i;
+	for (i = 0; i < args1_count; i++) printf("|%s| ", args1[i]);
+	printf("args1: %d\n", args1_count);
+	for (i = 0; i < args2_count; i++) printf("|%s| ", args2[i]);
+	printf("args2: %d\n", args2_count);
+	for (i = 0; i < args3_count; i++) printf("|%s| ", args3[i]);
+	printf("args3: %d\n", args3_count);
+	for (i = 0; i < args4_count; i++) printf("|%s| ", args4[i]);
+	printf("args4: %d\n", args4_count);
+}
+
+/**
  * Builtin implementation of change directory.
  */
-int mycd()
+int mycd(char** args)
 {
-	if (tokens[1] == NULL) {
-		write(STDOUT_FILENO, "cd: needs an arguement!\n", 24);
-		return 1;
+	if (args[1] == NULL) {
+		// change to home directory
+		char* home = getenv("HOME");
+		if (chdir(home) != 0) {
+			perror("cd");
+			return 1;
+		}
 	}
 	else {
-		if (chdir(tokens[1]) != 0) {
+		if (chdir(args[1]) != 0) {
 			perror("cd");
 			return 1;
 		}
@@ -237,11 +354,11 @@ int mypwd()
  *	0: successful run of command.
  *	1: command failed.
  */
-int handle_builtin()
+int handle_builtin(char* prog, char** args)
 {
 	int i, command = 0;
 	for (i = 0; i < BUILTIN; i++) {
-		if (strcmp(tokens[0], builtin[i]) == 0) {
+		if (strcmp(prog, builtin[i]) == 0) {
 			command = i + 1;
 			break;
 		}
@@ -253,7 +370,7 @@ int handle_builtin()
 		write(STDOUT_FILENO, "mysh: exiting\n", 14);
 		exit(EXIT_SUCCESS);
 	case 2:
-		return mycd();
+		return mycd(args);
 	case 3:
 		return mypwd();
 	default:
@@ -265,7 +382,7 @@ int handle_builtin()
 /**
  * Search set of directories for given program name.
  */
-int find_command()
+int find_command(int index)
 {
 	int i, j, dir_count = 0, name_count = 0;
 	char* str;
@@ -273,7 +390,7 @@ int find_command()
 	statbuf = malloc(sizeof(struct stat));
 
 	i = 0;
-	while (tokens[0][i] != '\0') {
+	while (tokens[index][i] != '\0') {
 		i++;
 		name_count++;
 	}
@@ -287,7 +404,7 @@ int find_command()
 		}
 		str = (char *) malloc(sizeof(char) * (dir_count + name_count + 1));
 		memcpy(str, directories[i], dir_count);
-		memcpy(&(str[dir_count+1]), tokens[0], name_count);
+		memcpy(&(str[dir_count]), tokens[index], name_count);
 		str[dir_count + name_count] = '\0';
 		if (stat(str, statbuf) == 0) {
 			free(str);
@@ -308,7 +425,7 @@ int simple_process()
 	int pid, id, wait_status;
 	
 	// if we cannot find/access the file, return non-zero exit status.	
-	if (!find_command()) {
+	if (find_command(0) == 1) {
 		return 1;
 	}
 	
@@ -342,12 +459,12 @@ int has_pipe()
 	int i;
 
 	pipe_info[0] = 0;
-	pipe_inf0[1] = -1;
+	pipe_info[1] = -1;
 	
 	// search over tokens to find pipe.
 	for (i = 0; i < token_count; i++) {
 		if (strcmp(tokens[i], "|") == 0) {
-			pip_info[1] = i;
+			pipe_info[1] = i+1;
 			return 0;
 		}
 	}
@@ -355,11 +472,375 @@ int has_pipe()
 }
 
 /**
+ * Check if piped command has redirection as well.
+ */
+int pipe_has_redirection()
+{
+	int i;
+	for (i = 0; i < token_count; i++) {
+		if (strcmp(tokens[i], "<") == 0) return 0;
+		if (strcmp(tokens[i], ">") == 0) return 0;
+	}
+	return 1; // no redirection
+}
+
+/**
+ * Check if redirection in the piped command is valid.
+ */
+int valid_redirection()
+{
+	int i, pipe_index = 0;
+	
+	// error checking.
+	// shouldn't ever happen, we should have location of pipe already. 
+	if ( (pipe_index = pipe_info[1]) <= 0) {
+		return 1;
+	}
+	
+	// check for redirection before pipe (only allowing '<' before pipe)
+	for (i = 0; i < pipe_index; i++) {
+		if (strcmp(tokens[i], ">") == 0) return 1;
+	}
+
+	// check for redirection after pipe (only allowing '>' after pipe).
+	for (i = pipe_index + 1; i < token_count; i++) {
+		if (strcmp(tokens[i], "<") == 0) return 1;
+	}
+
+	return 0; // valid redirection
+}
+
+/**
+ * Determine if the program is a built in program.
+ */
+int is_builtin(char* prog)
+{
+	int i;
+	for (i = 0; i < BUILTIN; i++) {
+		if (strcmp(prog, builtin[i]) == 0) {
+			return 0;
+		}
+	}
+	return 1;
+	
+}
+
+/**
+ * Determine the type of program given through input.
+ * Return -1 if not a valid program.
+ */
+int determine_prog_type(int index, char* prog)
+{
+	// return 1 for built in, 2 for needing to use exec.
+	if (is_builtin(prog) == 0) return 1;
+	if (!find_command(index)) return 2;
+	return -1; // bad command
+}
+
+/**
+ * Call programs with a pipe (and no redirection). 
+ */
+int simple_pipe()
+{
+	int p1, p2, id1, id2;
+	int p[2];
+
+	// determine type of program 1 and 2.
+	p1 = determine_prog_type(0, tokens[0]);
+	p2 = determine_prog_type(pipe_info[1], tokens[pipe_info[1]]);
+	if (p1 == -1 || p2 == -1) {
+		write(STDOUT_FILENO, "Invalid command!\n", 17);
+		return 1;
+	}
+
+	// call functions accordingly
+	if (p1 == 1 && p2 == 1) {
+		if (pipe(p) == -1) {
+			perror("pipe");
+			return 1;
+		}
+		if ( (id1 = fork()) == -1) {
+			perror("fork");
+			return 1;
+		}
+		// child process
+		if (id1 == 0) {
+			close(p[0]);
+			dup2(p[1], STDOUT_FILENO);
+			close(p[1]);
+
+			if (handle_builtin(tokens[0], args1) == 1){
+				write(STDOUT_FILENO, "Bad command\n", 12);
+				return 1;
+			}
+		} else {
+			if ( (id2 = fork()) == -1) {
+				perror("fork");
+				return 1;
+			}
+			if (id2 == 0) {
+				close(p[1]);
+				dup2(p[0], STDIN_FILENO);
+				close(p[0]);
+				if (handle_builtin(tokens[args1_count], args2) == 1) {
+					write(STDOUT_FILENO, "Bad command\n", 12);
+					return 1;
+				}
+			}
+			else {
+				wait(NULL);
+				wait(NULL);
+			}
+		}
+	} else if (p1 == 1 && p2 == 2) { // 
+	} else if (p1 == 2 && p2 == 1) { // exec 1, 2 built in
+		if (pipe(p) == -1) {
+			perror("pipe");
+			return 1;
+		}
+		if ( (id1 = fork()) == -1) {
+			perror("fork");
+			return 1;
+		}
+		// child process
+		if (id1 == 0) {
+			close(p[0]);
+			dup2(p[1], STDOUT_FILENO);
+			close(p[1]);
+
+			if (execvp(tokens[0], args1) < 0){
+				write(STDOUT_FILENO, "Bad command\n", 12);
+				return 1;
+			}
+		} else {
+			close(p[1]);
+			dup2(p[0], STDIN_FILENO);
+			close(p[0]);
+			if (handle_builtin(tokens[pipe_info[1]], args2) == 1) {
+				write(STDOUT_FILENO, "Bad command\n", 12);
+				return 1;
+			}		
+			wait(NULL);
+		}
+	} else { // exec both
+		return 1;
+	}
+	return 0;
+}
+
+/**
  * Call a program containing a pipe.
  */
 int call_program_with_pipe()
 {
+	
+	// determine if there is any redirection
+	if (valid_redirection() == 1) {
+		write(STDOUT_FILENO, "Invalid redirection combined with pipe!\n", 40);
+		return 1;
+	}
 
+	// determine where redirection takes place (if any).
+/*	if (has_redirection_before() == 0) {
+		return 0;
+	}
+	else if (has_redirection_after() == 0) {
+		return 0;
+	}
+	else if (has_redirection_both() == 0) {
+		return 0;
+	}
+	else {
+		return simple_pipe();
+*/	//}
+	
+	return simple_pipe();
+}
+
+/**
+ * Check if the command redirects output somewhere else.
+ */
+int has_redirect_out()
+{
+	int i;
+	for (i = 0; i < token_count; i++) {
+		if (strcmp(tokens[i], ">") == 0) return 0;
+	}
+	return 1;
+}
+
+/**
+ * Call program with output redirection.
+ */
+int handle_redirect_out()
+{
+	int res, fd, copy, id;
+
+	// args2[0] = output file to send output to.
+	if (is_builtin(tokens[0]) == 0) {
+		copy = dup(STDOUT_FILENO);
+		fd = open(args2[0], O_WRONLY | O_CREAT | O_TRUNC, 0640);	
+		dup2(fd, STDOUT_FILENO);
+		close(fd);
+		res = handle_builtin(tokens[0], args1);
+		dup2(copy, STDOUT_FILENO);
+		close(copy);
+		return res;
+	} else {
+		if (find_command(0) == 0) {
+			copy = dup(STDOUT_FILENO);
+			fd = open(args2[0], O_WRONLY | O_CREAT | O_TRUNC, 0640);
+			dup2(fd, STDOUT_FILENO);
+			close(fd);
+			if ( (id = fork()) == 0) {
+				//printf("|%s|\n", args1[1]);
+				if (execvp(tokens[0], args1) < 0) {
+					perror("exec");
+				}
+				return 1;
+			}
+			else {
+				wait(NULL);
+				dup2(copy, STDOUT_FILENO);
+				close(copy);
+				return 0;
+			}
+		}
+	}
+	
+	write(STDOUT_FILENO, "Program does not exists.\n", 25);
+	return 1;
+}
+
+// free mem from cpy
+void free_cpy(char** c, int size)
+{
+	for (int i = 0; i < size; i++) {
+		free(c[i]);
+	}
+	free(c);
+}
+
+/**
+ * Search set of directories for given program name.
+ */
+int find_cmd(char** t, int index)
+{
+	int i, j, dir_count = 0, name_count = 0;
+	char* str;
+	struct stat *statbuf;
+	statbuf = malloc(sizeof(struct stat));
+	
+	i = 0;
+	while (t[index][i] != '\0') {
+		i++;
+		name_count++;
+	}
+
+	for (i = 0; i < DIRECTORIES; i++) {
+		j = 0;
+		dir_count = 0;
+		while (directories[i][j] != '\0') {
+			j++;
+			dir_count++;
+		}
+		str = (char *) malloc(sizeof(char) * (dir_count + name_count + 1));
+		memcpy(str, directories[i], dir_count);
+		memcpy(&(str[dir_count]), t[index], name_count);
+		str[dir_count + name_count] = '\0';
+		if (stat(str, statbuf) == 0) {
+			free(str);
+			free(statbuf);
+			return 0;
+		}
+		free(str);
+	}
+	free(statbuf);
+	return 1;
+}
+
+
+/**
+ * Handle taking in input from file redirect.
+ */
+int handle_redirect_in()
+{
+	int res, fin, fd, copy, copy_count, id;
+	
+	fin = open(tokens[2], O_RDONLY);
+	if (fin <= 0) {
+		perror("open");
+		return 1;
+	}
+
+	// make copy of tokens
+	char** cpy = (char **) malloc(sizeof(char *) * token_count);
+	
+//	printf("tokens: %d\n", token_count);
+	for (int i = 0; i < token_count; i++) {
+		printf("size: %ld\n", sizeof(tokens[i]));
+		cpy[i] = malloc(sizeof(tokens[i]));
+		strcpy(cpy[i], tokens[i]);
+	}
+	copy_count = token_count;
+
+	free_tokens();
+	free_read_arr();
+	token_count = 0;
+	read_arr_size = 0;
+	read_input(fin);
+	tokenize_input();
+	print_tokens();
+
+	// args2[0] = output file to send output to.
+	if (is_builtin(cpy[0]) == 0) {
+		copy = dup(STDOUT_FILENO);
+		fd = open(args2[0], O_WRONLY | O_CREAT | O_TRUNC, 0640);	
+		dup2(fd, STDOUT_FILENO);
+		close(fd);
+		res = handle_builtin(cpy[0], args1);
+		dup2(copy, STDOUT_FILENO);
+		close(copy);
+		free_cpy(cpy, copy_count);
+		return res;
+	} else {
+		if (find_cmd(cpy, 0) == 0) {
+			copy = dup(STDOUT_FILENO);
+			fd = open(args2[0], O_WRONLY | O_CREAT | O_TRUNC, 0640);
+			dup2(fd, STDOUT_FILENO);
+			close(fd);
+			if ( (id = fork()) == 0) {
+				if (execvp(cpy[0], tokens) < 0) {
+					perror("exec");
+				}
+				free_cpy(cpy, copy_count);
+				return 1;
+			}
+			else {
+				wait(NULL);
+				dup2(copy, STDOUT_FILENO);
+				close(copy);
+				free_cpy(cpy, copy_count);
+				return 0;
+			}
+		}
+	}
+	
+	write(STDOUT_FILENO, "Program does not exists.\n", 25);
+	free_cpy(cpy, copy_count);
+	return 1;
+}
+
+/**
+ * Check if we have file redirect in.
+ */
+int has_redirect_in()
+{
+	int i;
+	for (i = 0; i < token_count; i++) {
+		if (strcmp(tokens[i], "<") == 0) return 0;
+	}
+	return 1;
 }
 
 /**
@@ -379,14 +860,20 @@ int call_program()
 
 	// check first for pipes then handle calling them.
 	if (has_pipe() == 0) {
-		call_program_with_pipe();		
+		return call_program_with_pipe();		
 	}
 	
-	// check if there are any redirects
-		
+	// check if there are any redirects (only redirects at this point)
+	if (has_redirect_out() == 0) {
+		return handle_redirect_out();
+	}
+	if (has_redirect_in() == 0) {
+		return handle_redirect_in();
+	}
+
 
 	// check if we have a build in command
-	switch (handle_builtin()) {
+	switch (handle_builtin(tokens[0], args1)) {
 	case 0:
 		return 0;
 	case 1:
@@ -401,6 +888,112 @@ int call_program()
 	status = simple_process();
 
 	return status;
+}
+
+/**
+ * Check tokens if home directory escape sequence occurs, inserts path if it does.
+ */
+void check_home()
+{
+	int i, j, len = 0, token_len = 0;
+	char* env;
+	char buff[100];
+	char cpy[100];
+
+	for (i = 0; i < token_count; i++) {
+		if (tokens[i][0] == '~') {
+			env = getenv("HOME");
+			if (env == NULL) return;
+			for (j = 0; j < 100; j++) {
+				if (env[j] == '\0') break;
+				buff[j] = env[j];
+				len++;
+			}
+			// get size of token
+			for (j = 0; j < 100; j++) {
+				token_len++;
+				if (tokens[i][j] == '\0') break;
+			}
+			memcpy(cpy, &(tokens[i][1]), token_len-1);
+			char* copy = realloc(tokens[i], (token_len + len + 1));
+			if (copy == NULL) return;
+			memcpy(copy, buff, len);
+			memcpy(&(copy[len]), cpy, token_len-1);
+			tokens[i] = copy;
+		}
+	}
+}
+
+/**
+ * Expand wildcard if there are matches, return 0 if no matches.
+ */
+int expand_wildcard(char* str, int length)
+{
+	//printf("String: %s\n", str);
+
+	int j, wildcard_hit, len, before_len, after_len, difference, match;
+	char before[50]; // before wildcard
+	char after[50];  // after wildcard
+	char buff[100];
+	char cpy[50];
+	struct dirent *de;
+	
+	DIR *dp = opendir(getcwd(buff, 100));
+
+	if (!dp) {
+		perror("opendir");
+		return 0;
+	}
+
+	wildcard_hit = 0, before_len = 0, after_len = 0, j = 0;	
+	while (str[j] != '\0') {
+		if (str[j] == '*') {
+			wildcard_hit = 1;
+			j++;
+			continue;
+		}
+		if (wildcard_hit) {
+			after[after_len] = str[j];
+			after_len++;
+		}
+		else {
+			before[before_len] = str[j];
+			before_len++;
+		}
+		j++;
+	}
+		
+	before[before_len] = '\0';
+	after[after_len] = '\0';
+	before_len;
+	after_len;
+	//printf("before: %s, after: %s\n", before, after);
+	match = 0;
+	// search the directory for matches
+	while ( (de = readdir(dp)) ) {
+		len = strlen(de->d_name);
+		strncpy(cpy, (de->d_name), before_len);
+		cpy[before_len] = '\0';
+		if (strcmp(cpy, before) == 0) {
+			memset(cpy, '\0', 50);
+			strncpy(cpy, &( (de->d_name)[len - after_len] ), after_len);
+			if (strcmp(cpy, after) == 0) {
+				// we have a wildcard match, add a new token.
+				if (token_count + 2 >= tokens_capacity) {
+					tokens_capacity += tokens_capacity;
+					tokens = (char **) realloc(tokens, (sizeof(char *) * tokens_capacity));
+				}
+				tokens[token_count] = (char *) malloc(sizeof(char) * (len + 1));
+				memcpy(tokens[token_count], (de->d_name), len+1);
+				token_count++;
+				match = 1;
+			}
+			memset(cpy, '\0', 50);
+		}
+	}
+	
+	closedir(dp);
+	return match;
 }
 
 /** 
@@ -421,14 +1014,27 @@ int start_shell(int fd)
 			// nothing left to read.
 			return 0;
 		}
-		tokenize_input();
+		if (tokenize_input()) {
+			write(STDOUT_FILENO, "No wildcard match!\n", 19);
+			status = 1;
+			free_tokens();
+			free_read_arr();
+			continue;
+		}
+	//	print_tokens();
 		// do something with input
-		//print_tokens();
-		status = call_program();
+		check_home();
+		split_args();
+		//print_args();
 
+		//expand_wildcard();
+//		print_tokens();
+		status = call_program();
+		
 		// free read array (and eventually tokens array
 		free_read_arr();
 		free_tokens();
+		free_args();
 	}
 }
 

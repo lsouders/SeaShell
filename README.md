@@ -37,8 +37,14 @@ and redirection is combined into one command, it will be handled as follows:
 	be sending output to the second program twice, which is an issue.
 If a pipe and redirection is not applied as stated above, the command will be considered invalid and 
 an error will be returned.
+(Piping is still currently being worked on as we've been having some implementation issues.)
 
 Redirection:
 =========================================================================================================
-(Still need to include how we plan to handle redirection here. Some examples are listed in the most recent
-announcement by the professor).
+Redirecting output: To do this, we read the first token after ">" in our token list. We then duplicated
+the the given text file with STDOUT\_FILENO to set a new file descriptor for us to send program output
+to. We are still currently working on file input. 
+
+Wildcards:
+=========================================================================================================
+
