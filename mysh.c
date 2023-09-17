@@ -126,7 +126,7 @@ int tokenize_input()
 				if (token_len == 0) break;
 				if (wildcard_flag) {
 					if (!expand_wildcard(tok, token_len)) {
-						token_count++;
+						//token_count++;
 						return 1;
 					}
 					wildcard_flag = 0;
@@ -149,7 +149,7 @@ int tokenize_input()
 				if (token_len == 0) continue; // nothingn to do
 				if (wildcard_flag) {
 					if (!expand_wildcard(tok, token_len)) {
-						token_count++;
+						//token_count++;
 						return 1;
 					}
 					wildcard_flag = 0;
@@ -167,7 +167,7 @@ int tokenize_input()
 				if (token_len != 0) {
 					if (wildcard_flag) {
 						if (!expand_wildcard(tok, token_len)) {
-							token_count++;
+					//		token_count++;
 							return 1;
 						}
 						wildcard_flag = 0;
@@ -201,6 +201,7 @@ int tokenize_input()
 	else {
 		tokens[token_count] = NULL;
 	}
+	return 0;
 }
 
 /**
@@ -542,89 +543,67 @@ int determine_prog_type(int index, char* prog)
  */
 int simple_pipe()
 {
-	int p1, p2, id1, id2;
+	int pipe1_id, pipe2_id;
 	int p[2];
 
-	// determine type of program 1 and 2.
-	p1 = determine_prog_type(0, tokens[0]);
-	p2 = determine_prog_type(pipe_info[1], tokens[pipe_info[1]]);
-	if (p1 == -1 || p2 == -1) {
-		write(STDOUT_FILENO, "Invalid command!\n", 17);
+	// start pipe
+	if (pipe(p) < 0) {
+		perror("pipe");
+		return 1;
+	}	
+
+	// fork for first process
+	if ( (pipe1_id = fork()) < 0) {
+		perror("fork");
 		return 1;
 	}
 
-	// call functions accordingly
-	if (p1 == 1 && p2 == 1) {
-		if (pipe(p) == -1) {
-			perror("pipe");
-			return 1;
+	if (pipe1_id == 0) { // child process
+		close(p[0]); // don't need the read end.
+		dup2(p[1], STDOUT_FILENO); // duplicate STDOUT for second process
+		close(p[1]);
+
+		switch(determine_prog_type(0, tokens[0])) {
+		case 1:
+			break;
+		case 2:
+			if (execvp(tokens[0], args1) < 0) {
+				perror("exec");
+				return 1;
+			}
 		}
-		if ( (id1 = fork()) == -1) {
+	}
+	else { // parent process
+		if ( (pipe2_id = fork()) < 0) {
 			perror("fork");
 			return 1;
 		}
-		// child process
-		if (id1 == 0) {
+		// child 2 here
+		if (pipe2_id == 0) {
+			close(p[1]); // we only need read end.
+			dup2(p[0], STDIN_FILENO); // dup read end
 			close(p[0]);
-			dup2(p[1], STDOUT_FILENO);
-			close(p[1]);
 
-			if (handle_builtin(tokens[0], args1) == 1){
-				write(STDOUT_FILENO, "Bad command\n", 12);
-				return 1;
-			}
-		} else {
-			if ( (id2 = fork()) == -1) {
-				perror("fork");
-				return 1;
-			}
-			if (id2 == 0) {
-				close(p[1]);
-				dup2(p[0], STDIN_FILENO);
-				close(p[0]);
-				if (handle_builtin(tokens[args1_count], args2) == 1) {
-					write(STDOUT_FILENO, "Bad command\n", 12);
+			switch(determine_prog_type(pipe_info[1], tokens[pipe_info[1]])) {
+			case 1:
+				break;
+			case 2:
+				if (execvp(tokens[pipe_info[1]], args2) < 0) {
+					perror("exec");
 					return 1;
 				}
-			}
-			else {
-				wait(NULL);
-				wait(NULL);
-			}
-		}
-	} else if (p1 == 1 && p2 == 2) { // 
-	} else if (p1 == 2 && p2 == 1) { // exec 1, 2 built in
-		if (pipe(p) == -1) {
-			perror("pipe");
-			return 1;
-		}
-		if ( (id1 = fork()) == -1) {
-			perror("fork");
-			return 1;
-		}
-		// child process
-		if (id1 == 0) {
-			close(p[0]);
-			dup2(p[1], STDOUT_FILENO);
-			close(p[1]);
-
-			if (execvp(tokens[0], args1) < 0){
-				write(STDOUT_FILENO, "Bad command\n", 12);
+			default:
+				write(STDOUT_FILENO, "Invalid command!\n", 17);
 				return 1;
 			}
-		} else {
-			close(p[1]);
-			dup2(p[0], STDIN_FILENO);
-			close(p[0]);
-			if (handle_builtin(tokens[pipe_info[1]], args2) == 1) {
-				write(STDOUT_FILENO, "Bad command\n", 12);
-				return 1;
-			}		
+		}
+		// parent executing, waiting for both children.
+		else {
+			wait(NULL);
 			wait(NULL);
 		}
-	} else { // exec both
-		return 1;
 	}
+
 	return 0;
 }
 
@@ -965,8 +944,8 @@ int expand_wildcard(char* str, int length)
 		
 	before[before_len] = '\0';
 	after[after_len] = '\0';
-	before_len;
-	after_len;
+	//before_len;
+	//after_len;
 	//printf("before: %s, after: %s\n", before, after);
 	match = 0;
 	// search the directory for matches
@@ -991,7 +970,6 @@ int expand_wildcard(char* str, int length)
 			memset(cpy, '\0', 50);
 		}
 	}
-	
 	closedir(dp);
 	return match;
 }

@@ -47,4 +47,46 @@ to. We are still currently working on file input.
 
 Wildcards:
 =========================================================================================================
+To handle wildcard expansion, we kept a flag indicating if a wildcard was found while tokenizing our 
+input. If this were the case, then we used a helper function to open the current working directory, and
+search for matching files. To do this, we stored the characters before and after the * in our token. These
+were stored as strings, which we kept track of the length of. Then, we used strcmp to compare the 
+before_\*_str with dir\_entry\_str upto before\_\*\_str\_len. We did the same for after the * . If both 
+matched, we had a wildcard expansion and added it as a token. 
+
+Extensions:
+=========================================================================================================
+We completed extensions (3.1) Escape sequences and (3.2) Home directory. To handle escape sequences,
+whenever we encountered a backslash when building our tokens, we simply added the next character to the
+token we were building, regardless of what that character was. For the home directory, we simply used
+getenv("HOME") to get a string that gave an absolute path to the home directory. We then took whatever 
+argument that contained '~/', and concatonated anything after the forward slash onto the string that
+represented the home directory path. For example, if the home directory is /common/home/las541, and we
+have a token that is ~/Desktop/SoftwareMethodology, the token would be changed to:
+/common/home/las541/Desktop/SoftwareMethodology. Additionally, if cd was called with no arguments,
+we got the home environment string and passed it to chdir().
+
+Testing:
+==========================================================================================================
+A majority of our testing involved testing the tokenizer with various different commands, some including 
+spaces between tokens, some not. We then have a print\_tokens() in our program to display the tokens so
+we can verify that they are all store properly. Some test cases are as follows:
+- echo Hello World > from < our | shell?
+- cat some >test command> for our|tokenizer
+- cd this<is>not|a directory><
+- foo bar\ baz\<qu\ux\\>spam (this was used to verify extension 3.1)
+
+We then needed to test that we can run programs with the proper argument lists. Some of our test cases are:
+- echo Hello World > foo (foo must be created if it doesn't exist, truncated if it does).
+- cat foo	         (must print "Hello World").
+- vim mysh.c		 (We were able to work on our program while inside our program, which we found really cool).
+- make			 (The program compiled while in our program, but obviously we needed to terminate and run again
+				to see the changes in effect).
+- ls ~/Desktop > foo	 (verify that ls is working, along with extension 3.2 and output redirection).
+- touch food friend flipped
+- echo f\*d	  	 (Make sure wildcard expansion is working. This should print: food friend flipped (in no certain order).
+- mkdir frye fine, then touch foo in frye and touch bar in fine 
+- ls f\*e > output	 (this will print the contents of directories 'frye' and 'fine' into a file named output) 
+- exit			 (make sure we can terminate properly, especially without memory leaks)
+- cd			 (verify we can cd to home directory when given no arguments).
 
