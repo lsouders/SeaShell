@@ -31,9 +31,9 @@ Piping:
 If there is any piping taking place, we must create subprocesses to handle writing output to our next
 program, where that program will read it in and make use of it. Also, it is worth noting that if piping
 and redirection is combined into one command, it will be handled as follows:
-	- '<' will only occur before a pipe (as input to the first program). If this occurred after the
+- '<' will only occur before a pipe (as input to the first program). If this occurred after the
 	pipe, we would have two sources of input for the second program, which is an issue.
-	- '>' will only occur after a pipe. If this had occurred before the pipe, we would essentially 
+- '>' will only occur after a pipe. If this had occurred before the pipe, we would essentially 
 	be sending output to the second program twice, which is an issue.
 If a pipe and redirection is not applied as stated above, the command will be considered invalid and 
 an error will be returned.
